@@ -3,6 +3,13 @@ uuid = "6e0c5a35-739d-4bd5-a77e-7f2f987dd6fd"
 authors = ["Joshua J Bon"]
 version = "1.0.0-DEV"
 
+[deps]
+BayesScoreCal = "986b08a2-df14-4163-beea-1d3f6d344e0b"
+Catalyst = "479239e8-5488-4da2-87a7-35f2df7eef83"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+GaussianFilters = "08d575fb-911d-541e-8431-6cfa767e7851"
+ModelingToolkit = "961ee093-0014-501f-94e3-6117800e7a78"
+
 [compat]
 julia = "1"
 
