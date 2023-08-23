@@ -109,4 +109,10 @@ ll = update!(g, rand(11), Diagonal(ones(11)), Diagonal(ones(11)))
 
 g = GaussianFilter(ord_u0, Diagonal(0.5 * sqrt.(max.(ord_u0, 1.0))))
 
-kalman!(g, 0.1, mapk_sde, H, R, p .+ 0.0001, obsv, 0.1, nugget = 0.0)
+kalman!(g, 0.0, mapk_sde, H, R, p.+ 0.000001, obsv, 0.1, nugget = 0.0)
+
+
+x = GaussianFilter(ord_u0, Diagonal(0.5 * sqrt.(max.(ord_u0, 1.0))))
+kfsde = KalmanApproxSDE(mapk_sde, obsv, 0.0, 0.1, H, R, x)
+
+kfsde(p)
