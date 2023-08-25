@@ -1,7 +1,7 @@
 
 mutable struct GaussianFilter
-    μ::Vector{Float64}
-    Σ::AbstractMatrix{Float64}
+    μ::Vector{<:Real}
+    Σ::AbstractMatrix{<:Real}
 end
 
 function predict!(x::GaussianFilter, model::SDEFunction, p::Vector{<:Real}, dt::Float64; t::Real = 0.0, nugget::Real = 0.0)
@@ -74,25 +74,44 @@ struct KalmanApproxSDE
     t0::Float64 # initial time
     dt0::Float64 # (max) time increments
     H::AbstractMatrix{<:Real} # y = Hx + ε
-    R::AbstractMatrix{<:Real} # ε ~ N(0, R)
     x0::GaussianFilter # initial distirbution
     xscratch::GaussianFilter # scratch space for filter
 end
 
-KalmanApproxSDE(model::SDEFunction, observations::Vector{Observation}, t0::Float64, dt0::Float64, H::AbstractMatrix{<:Real}, R::AbstractMatrix{<:Real}, x0::GaussianFilter) = KalmanApproxSDE(model, observations, t0, dt0, H, R, x0, GaussianFilter(similar(x0.μ), similar(x0.Σ)))
+KalmanApproxSDE(model::SDEFunction, observations::Vector{Observation}, t0::Float64, dt0::Float64, H::AbstractMatrix{<:Real}, x0::GaussianFilter) = KalmanApproxSDE(model, observations, t0, dt0, H, x0, GaussianFilter(similar(x0.μ), similar(x0.Σ)))
 
+
+struct KalmanSolution
+    x::GaussianFilter # final distribution
+    logZ::Real
+    info::Int64
+end
 
 # unknown prior mean covariance
-function (k::KalmanApproxSDE)(μ0::AbstractVector{<:Real}, Σ0::AbstractMatrix{<:Real}, p::Vector{<:Real}; nugget::Tuple{Float64, Float64} = (0.0,0.0))
+function (k::KalmanApproxSDE)(p::Vector{<:Real}, R::AbstractMatrix{<:Real}, μ0::AbstractVector{<:Real}, Σ0::AbstractMatrix{<:Real}; nugget::Tuple{Float64, Float64} = (0.0,0.0))
     # initialise scratch
     k.xscratch.μ = μ0
     k.xscratch.Σ = Σ0
     
     # run Kalman Filter
-    loglike = kalman!(k.xscratch, k.t0, k.model, k.H, k.R, p, k.observations, k.dt0; nugget = nugget)
+    info = 0
+    loglike = 0.0
+    
+    try
+        loglike = kalman!(k.xscratch, k.t0, k.model, k.H, R, p, k.observations, k.dt0; nugget = nugget)
+    catch err
+        if err isa PosDefException
+            info = 1
+        elseif err isa SingularException
+            info = 2
+        else 
+            info = 99
+            throw(err)
+        end
+    end
 
-    return loglike
+    return KalmanSolution(deepcopy(k.xscratch), loglike, info)
 end
 
 # fixed prior mean covariance
-(k::KalmanApproxSDE)(p::Vector{<:Real}; nugget::Tuple{Float64, Float64} = (0.0,0.0)) = k(k.x0.μ, k.x0.Σ, p, nugget = nugget)
+(k::KalmanApproxSDE)(p::Vector{<:Real}, R::AbstractMatrix{<:Real}; nugget::Tuple{Float64, Float64} = (0.0,0.0)) = k(p, R, k.x0.μ, k.x0.Σ, nugget = nugget)
