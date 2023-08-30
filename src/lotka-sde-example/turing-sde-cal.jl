@@ -1,5 +1,5 @@
-# Parameter estimation in an SDE with Turing.jl
-# The approximate model for pra is taken from the Turing.jl documentation:
+# SDE parameter estimation with "quasi-likelihood" in Turing.jl
+# The approximate model is taken from the Turing.jl documentation:
 # https://turinglang.org/v0.28/tutorials/10-bayesian-differential-equations/#inference-of-a-stochastic-differential-equation
 # This is an example where we are not recovering the correct posterior
 # As shown by our calibration checks using coverage(...) then plotting
