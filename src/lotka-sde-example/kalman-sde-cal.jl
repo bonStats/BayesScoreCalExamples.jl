@@ -8,6 +8,9 @@ using Turing
 using SparseArrays
 using DifferentialEquations
 using Plots
+using ProgressMeter
+using Distributed
+using SharedArrays
 
 include("direct-ekf.jl")
 
@@ -120,5 +123,44 @@ end
 
 approxmodel = lv_kalman(kfsde)
 
-
 ch_approx = sample(approxmodel, NUTS(), N_samples; progress=true, drop_warmup=true)
+
+
+## Calibration
+
+function multiplyscale(x::Vector{Vector{Float64}}, scale::Float64) 
+    μ = mean(x)
+    scale .* (x .- [μ]) .+ [μ]
+end
+
+# transform
+bij_all = bijector(approxmodel)
+bij = Stacked(bij_all.bs[1:4]...)
+
+# select and transform approx samples
+select_approx_samples = getsamples(ch_approx, :pars, N_importance)
+
+cal_points = inverse(bij).(multiplyscale(bij.(select_approx_samples), vmultiplier))
+
+    # newx approx models: pre-allocate
+    tr_approx_samples_newx = SharedArray{Float64}(length(cal_points[1]), N_energy, N_importance)
+
+    pmeter = Progress(length(cal_points))
+
+    Threads.@threads for t in eachindex(cal_points)
+        # new data
+        new_prob = remake(prob_sde, p = [cal_points[t]..., 0.1, 0.1])
+        newdata = solve(new_prob, SOSRI(), saveat=0.1)
+        # (model|new data)
+        mod_obsv = [Observation(newdata(t),t) for t in otimes]
+        mod_kfsde = KalmanApproxSDE(lvem, mod_obsv, 0.0, 0.05, Diagonal(ones(2)), x)
+        mod_newdata = lv_kalman(mod_kfsde)
+        # mcmc(model|new data)
+        approx_samples_newdata = sample(mod_newdata, NUTS(), N_samples; progress=false, drop_warmup=false)
+
+        # samples from vi(model|new data)
+        tr_approx_samples_newx[:,:,t] = hcat(bij.(getsamples(approx_samples_newdata, :pars))...)
+            
+        ProgressMeter.next!(pmeter)
+    end
+    ProgressMeter.finish!(pmeter)
