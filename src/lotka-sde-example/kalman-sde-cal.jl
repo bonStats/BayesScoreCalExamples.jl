@@ -25,7 +25,7 @@ vmultiplier = 2.0
 dt = 0.1 # time step observations
 dtk = 0.02 # time step kalman
 
-
+# diagnostic settings
 checkprobs = range(0.1,0.95,step=0.05)
 
 
@@ -46,16 +46,22 @@ function getsamples(chains::Chains, sym::Symbol)
 end
 getparams(m::DynamicPPL.Model) = DynamicPPL.syms(DynamicPPL.VarInfo(m))
 
+# calibration helpers
+function multiplyscale(x::Vector{Vector{Float64}}, scale::Float64) 
+    μ = mean(x)
+    scale .* (x .- [μ]) .+ [μ]
+end
+
 # setup Lotka Volterra
 u0 = [1.0, 1.0]
 tspan = (0.0, 10.0)
+true_p = [1.5, 1.0, 3.0, 1.0, 0.1, 0.1]
+
 function multiplicative_noise!(du, u, p, t)
     x, y = u
     du[1] = p[5] * x
     return du[2] = p[6] * y
 end
-
-true_p = [1.5, 1.0, 3.0, 1.0, 0.1, 0.1]
 
 function lotka_volterra!(du, u, p, t)
     x, y = u
@@ -102,7 +108,7 @@ kfsde = KalmanApproxSDE(lvem, obsv, 0.0, dtk, H, x)
 
 @model function lv_kalman(kfsde::KalmanApproxSDE)
 
-    pars = zeros(6)
+    pars = zeros(4) # 'pars' must be first named in turing model
     ϕ = zeros(2)
     # Prior distributions.
     pars[1] ~ Uniform(0.1,4) # α
@@ -137,17 +143,17 @@ ch_approx = sample(approxmodel, NUTS(), N_samples; progress=true, drop_warmup=tr
 
 ## Calibration
 
-function multiplyscale(x::Vector{Vector{Float64}}, scale::Float64) 
-    μ = mean(x)
-    scale .* (x .- [μ]) .+ [μ]
-end
+# get vector of samples
+approx_samples = getsamples(ch_approx, :pars)
 
 # transform
+npars = length(approx_samples[1])
+true_pars = true_p[1:npars]
 bij_all = bijector(approxmodel)
-bij = Stacked(bij_all.bs[1:4]...)
+bij = Stacked(bij_all.bs[1:npars]...)
 
 # select and transform approx samples
-approx_samples = getsamples(ch_approx, :pars)
+
 select_id = sample(1:length(ch_approx), N_importance) # manual because we need them to line up
 select_approx_samples = approx_samples[select_id,1]
 additional_approx_samples = getsamples(ch_approx, :ϕ)[select_id,1]
@@ -170,7 +176,7 @@ cal_points = inverse(bij).(multiplyscale(bij.(select_approx_samples), vmultiplie
         mod_approx_samples_newdata = sample(mod_newdata, NUTS(), N_samples; progress=false, drop_warmup=false)
 
         # samples from mcmc(model|new data)
-        cal_samples_array[:,:,t] = hcat(getsamples(approx_samples_newdata, :pars)...)
+        cal_samples_array[:,:,t] = hcat(getsamples(mod_approx_samples_newdata, :pars)...)
             
     end
 
@@ -181,4 +187,6 @@ cal_points = inverse(bij).(multiplyscale(bij.(select_approx_samples), vmultiplie
 
     cal = Calibration(bij.(cal_points), bij.(cal_samples))
 
-    jldsave("kalman-side-cal.jld2"; cal, approx_samples, true_p[1:4])
+
+
+    jldsave("kalman-side-cal.jld2"; cal, approx_samples, true_pars)
