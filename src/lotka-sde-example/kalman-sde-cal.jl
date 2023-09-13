@@ -7,10 +7,10 @@ using LinearAlgebra
 using Turing
 using SparseArrays
 using DifferentialEquations
-using Plots
-using ProgressMeter
+using StatsPlots
 using Distributed
 using SharedArrays
+using JLD2
 
 include("direct-ekf.jl")
 
@@ -22,6 +22,9 @@ N_importance = 200
 N_energy = 1000
 energyβ = 1.0
 vmultiplier = 2.0
+dt = 0.1 # time step observations
+dtk = 0.02 # time step kalman
+
 
 checkprobs = range(0.1,0.95,step=0.05)
 
@@ -87,28 +90,31 @@ function lvjac(u,p)
     return [j11 j12; j21 j22]
 end
 
-otimes = 0.1:0.1:tspan[2]
+otimes = dt:dt:tspan[2]
 obsv = [Observation(data(t),t) for t in otimes]
 
 lvem = KalmanEM(lvdrift, lvnoise, lvjac)
 
-x = GaussianFilter(u0, Diagonal(0.01 * ones(2)))
-kfsde = KalmanApproxSDE(lvem, obsv, 0.0, 0.05, Diagonal(ones(2)), x)
+H = Diagonal(ones(2)) # map latent to obs
+Σ₀ = Diagonal(0.01 * ones(2))
+x = GaussianFilter(u0, Σ₀)
+kfsde = KalmanApproxSDE(lvem, obsv, 0.0, dtk, H, x)
 
 @model function lv_kalman(kfsde::KalmanApproxSDE)
 
     pars = zeros(6)
+    ϕ = zeros(2)
     # Prior distributions.
-    pars[1] ~ Uniform(0.1,5) # α
-    pars[2] ~ Uniform(0.1,5) # β
-    pars[3] ~ Uniform(0.1,5) # γ
-    pars[4] ~ Uniform(0.1,5) # δ
-    pars[5] = 0.1 #~ Uniform(0.01, 0.5) # ϕ[1]
-    pars[6] = 0.1 #~ Uniform(0.01, 0.5) # ϕ[2]
+    pars[1] ~ Uniform(0.1,4) # α
+    pars[2] ~ Uniform(0.1,4) # β
+    pars[3] ~ Uniform(0.1,4) # γ
+    pars[4] ~ Uniform(0.1,4) # δ
+    ϕ[1] ~ Uniform(0.01, 0.25) # 
+    ϕ[2] ~ Uniform(0.01, 0.25) # ϕ[2]
 
-    σ ~ InverseGamma(10, 1)
+    σ ~ Truncated(Normal(0, 0.05), 0.0, Inf)
 
-    sol = kfsde(pars, Diagonal(I * σ^2, 2))
+    sol = kfsde([pars; ϕ], Diagonal(I * σ^2, 2))
     
     if sol.info == 0
         Turing.@addlogprob! sol.logZ
@@ -120,6 +126,9 @@ kfsde = KalmanApproxSDE(lvem, obsv, 0.0, 0.05, Diagonal(ones(2)), x)
 
     return nothing
 end
+
+# try InverseGamma(10, 1) again, is this sensitive to initial conditions?
+# try uniform (0.01,0.1)?
 
 approxmodel = lv_kalman(kfsde)
 
@@ -138,29 +147,38 @@ bij_all = bijector(approxmodel)
 bij = Stacked(bij_all.bs[1:4]...)
 
 # select and transform approx samples
-select_approx_samples = getsamples(ch_approx, :pars, N_importance)
+approx_samples = getsamples(ch_approx, :pars)
+select_id = sample(1:length(ch_approx), N_importance) # manual because we need them to line up
+select_approx_samples = approx_samples[select_id,1]
+additional_approx_samples = getsamples(ch_approx, :ϕ)[select_id,1]
 
+# on transformed scale
 cal_points = inverse(bij).(multiplyscale(bij.(select_approx_samples), vmultiplier))
 
     # newx approx models: pre-allocate
-    tr_approx_samples_newx = SharedArray{Float64}(length(cal_points[1]), N_energy, N_importance)
-
-    pmeter = Progress(length(cal_points))
+    cal_samples_array = SharedArray{Float64}(length(cal_points[1]), N_energy, N_importance)
 
     Threads.@threads for t in eachindex(cal_points)
         # new data
-        new_prob = remake(prob_sde, p = [cal_points[t]..., 0.1, 0.1])
-        newdata = solve(new_prob, SOSRI(), saveat=0.1)
+        new_prob = remake(prob_sde, p = [cal_points[t]; additional_approx_samples[t]])
+        newdata = solve(new_prob, SOSRI(), saveat=0.01)
         # (model|new data)
         mod_obsv = [Observation(newdata(t),t) for t in otimes]
-        mod_kfsde = KalmanApproxSDE(lvem, mod_obsv, 0.0, 0.05, Diagonal(ones(2)), x)
+        mod_kfsde = KalmanApproxSDE(lvem, mod_obsv, 0.0, dtk, H, x)
         mod_newdata = lv_kalman(mod_kfsde)
         # mcmc(model|new data)
-        approx_samples_newdata = sample(mod_newdata, NUTS(), N_samples; progress=false, drop_warmup=false)
+        mod_approx_samples_newdata = sample(mod_newdata, NUTS(), N_samples; progress=false, drop_warmup=false)
 
-        # samples from vi(model|new data)
-        tr_approx_samples_newx[:,:,t] = hcat(bij.(getsamples(approx_samples_newdata, :pars))...)
+        # samples from mcmc(model|new data)
+        cal_samples_array[:,:,t] = hcat(getsamples(approx_samples_newdata, :pars)...)
             
-        ProgressMeter.next!(pmeter)
     end
-    ProgressMeter.finish!(pmeter)
+
+    # transform data to  Matrix{Vector}
+    cal_samples = [cal_samples_array[:,i,j] for i in 1:N_energy, j in 1:N_importance]
+    
+    # save calibration data
+
+    cal = Calibration(bij.(cal_points), bij.(cal_samples))
+
+    jldsave("kalman-side-cal.jld2"; cal, approx_samples, true_p[1:4])
