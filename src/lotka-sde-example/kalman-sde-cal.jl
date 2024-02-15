@@ -11,8 +11,11 @@ using StatsPlots
 using Distributed
 using SharedArrays
 using JLD2
+using DataFrames
+using CSV
 
 include("direct-ekf.jl")
+include("turing-helpers.jl")
 
 # approximate/true model settings
 N_samples = 1000
@@ -22,29 +25,14 @@ N_importance = 200
 N_energy = 1000
 energyβ = 1.0
 vmultiplier = 2.0
-dt = 0.1 # time step observations
-dtk = 0.02 # time step kalman
+dt = 0.2 # time step observations
+dtk = 0.05 # time step kalman
+
+# dt = 0.1 # time step observations
+# dtk = 0.02 # time step kalman
 
 # diagnostic settings
 checkprobs = range(0.1,0.95,step=0.05)
-
-
-# Turing helpers
-function getsamples(chains::Chains, sym::Symbol, sample_chain::Union{Iterators.ProductIterator{Tuple{UnitRange{Int64}, UnitRange{Int64}}},Vector{Tuple{Int64, Int64}}})
-    smpls = [vec(chains[sc[1], namesingroup(chains, sym), sc[2]].value) for sc in sample_chain]
-    convert.(Vector{Float64}, smpls)
-end
-function getsamples(chains::Chains, sym::Symbol, N::Int64)
-    # down sample
-    sample_chain = sample([Iterators.product(1:length(chains), 1:size(chains, 3))...], N, replace = false)
-    getsamples(chains, sym, sample_chain)
-end
-function getsamples(chains::Chains, sym::Symbol)
-    # full sample
-    sample_chain = Iterators.product(1:length(chains), 1:size(chains, 3))
-    getsamples(chains, sym, sample_chain)
-end
-getparams(m::DynamicPPL.Model) = DynamicPPL.syms(DynamicPPL.VarInfo(m))
 
 # calibration helpers
 function multiplyscale(x::Vector{Vector{Float64}}, scale::Float64) 
@@ -54,7 +42,7 @@ end
 
 # setup Lotka Volterra
 u0 = [1.0, 1.0]
-tspan = (0.0, 10.0)
+tspan = (0.0, 6.0)
 true_p = [1.5, 1.0, 3.0, 1.0, 0.1, 0.1]
 
 function multiplicative_noise!(du, u, p, t)
@@ -65,7 +53,7 @@ end
 
 function lotka_volterra!(du, u, p, t)
     x, y = u
-    α, β, γ, δ = p
+    α, β, γ, δ = p # gets p[1:4]
     du[1] = dx = α * x - β * x * y
     return du[2] = dy = δ * x * y - γ * y
 end
@@ -189,4 +177,91 @@ cal_points = inverse(bij).(multiplyscale(bij.(select_approx_samples), vmultiplie
 
 
 
-    jldsave("lotka-sde-example/kalman-sde-cal.jld2"; cal, approx_samples, true_pars)
+# jldsave("src/lotka-sde-example/kalman-sde-cal.jld2"; cal, approx_samples, true_pars, bij)
+
+cal = load("src/lotka-sde-example/kalman-sde-cal.jld2", "cal")
+approx_samples = load("src/lotka-sde-example/kalman-sde-cal.jld2", "approx_samples")
+true_pars = load("src/lotka-sde-example/kalman-sde-cal.jld2", "true_pars")
+bij = load("src/lotka-sde-example/kalman-sde-cal.jld2", "bij")
+
+# approximate weights
+is_weights = ones(N_importance)
+
+d = BayesScoreCal.dimension(cal)[1]
+tf = CholeskyAffine(d)
+M = inv(Diagonal(std(cal.μs)))
+res = energyscorecalibrate!(tf, cal, is_weights, scaling = M, penalty = (0.0, 0.05))
+
+tf.L
+tf.b
+
+# no adjustment
+calcheck_approx = coverage(cal, checkprobs)
+plot(checkprobs, hcat(calcheck_approx...)',  label = ["α"  "β"  "γ"  "δ"], title = "Approx. posterior calibration coverage")
+plot!(checkprobs, checkprobs, label = "target", colour = "black")
+
+# adjustment
+calcheck_adjust = coverage(cal, tf, checkprobs)
+plot(checkprobs, hcat(calcheck_adjust...)',  label = ["α"  "β"  "γ"  "δ"], title = "Adjusted posterior calibration coverage")
+plot!(checkprobs, checkprobs, label = "target", colour = "black")
+
+rmse(cal)
+rmse(cal,tf)
+
+# get adjusted samples
+tr_approx_samples = bij.(approx_samples)
+tf_samples = inverse(bij).(tf.(tr_approx_samples, [mean(tr_approx_samples)]))
+
+[mean(tf_samples) std(tf_samples)]
+
+# store results
+parnames = [Symbol("beta$i") for i in 1:4]
+
+samples = DataFrame[]
+push!(samples, 
+    DataFrame(
+        [parnames[i] => getindex.(approx_samples, i)[:,1] for i in 1:4]...,
+        :method => "Approx-post",
+        :alpha => -1.0
+    )
+)
+
+push!(samples, 
+    DataFrame(
+        [parnames[i] => getindex.(tf_samples, i)[:,1] for i in 1:4]...,
+        :method => "Adjust-post",
+        :alpha => 1.0
+    )
+)
+
+push!(samples, 
+    DataFrame(
+        [parnames[i] => true_p[i] for i in 1:4]...,
+        :method => "True-vals",
+        :alpha => -1.0
+    )
+)
+
+check = DataFrame[]
+
+push!(check,
+    DataFrame(
+        [parnames[i] => getindex.(calcheck_approx, i) for i in 1:4]...,
+        :prob => checkprobs,
+        :method => "Approx-post",
+        :alpha => -1.0
+    )
+)
+
+push!(check,
+    DataFrame(
+        [parnames[i] => getindex.(calcheck_adjust, i) for i in 1:4]...,
+        :prob => checkprobs,
+        :method => "Adjust-post",
+        :alpha => 1.0
+    )
+)
+
+
+#CSV.write("src/lotka-sde-example/kalman-sde-samples.csv", samples)
+#CSV.write("src/lotka-sde-example/kalman-sde-covcheck.csv", check)

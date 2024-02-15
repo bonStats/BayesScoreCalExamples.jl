@@ -23,6 +23,8 @@ using CSV
 using BayesScoreCal
 using ProgressMeter
 
+include("turing-helpers.jl")
+
 # set to redo simulations (CACHE TOO LARGE TO ADD TO REPO)
 use_cache = false
 if use_cache
@@ -44,24 +46,6 @@ energyβ = 1.0
 vmultiplier = 2.0
 
 checkprobs = range(0.1,0.95,step=0.05)
-
-
-# Turing helpers
-function getsamples(chains::Chains, sym::Symbol, sample_chain::Union{Iterators.ProductIterator{Tuple{UnitRange{Int64}, UnitRange{Int64}}},Vector{Tuple{Int64, Int64}}})
-    smpls = [vec(chains[sc[1], namesingroup(chains, sym), sc[2]].value) for sc in sample_chain]
-    convert.(Vector{Float64}, smpls)
-end
-function getsamples(chains::Chains, sym::Symbol, N::Int64)
-    # down sample
-    sample_chain = sample([Iterators.product(1:length(chains), 1:size(chains, 3))...], N, replace = false)
-    getsamples(chains, sym, sample_chain)
-end
-function getsamples(chains::Chains, sym::Symbol)
-    # full sample
-    sample_chain = Iterators.product(1:length(chains), 1:size(chains, 3))
-    getsamples(chains, sym, sample_chain)
-end
-getparams(m::DynamicPPL.Model) = DynamicPPL.syms(DynamicPPL.VarInfo(m))
 
 # setup Lotka Volterra
 u0 = [1.0, 1.0]
@@ -222,7 +206,7 @@ rmse(cal,tf)
 # get adjusted samples
 approx_samples = vec(getsamples(ch_approx, :pars))
 tr_approx_samples = bij.(approx_samples)
-tf_samples = inv(bij).(tf.(tr_approx_samples, [mean(tr_approx_samples)]))
+tf_samples = inverse(bij).(tf.(tr_approx_samples, [mean(tr_approx_samples)]))
 
 [mean(tf_samples) std(tf_samples)]
 
@@ -232,7 +216,7 @@ parnames = [Symbol("beta$i") for i in 1:4]
 samples = DataFrame[]
 push!(samples, 
     DataFrame(
-        [parnames[i] => getindex.(approx_samples, i) for i in 1:4]...,
+        [parnames[i] => getindex.(approx_samples, i)[:,1] for i in 1:4]...,
         :method => "Approx-post",
         :alpha => -1.0
     )
@@ -240,7 +224,7 @@ push!(samples,
 
 push!(samples, 
     DataFrame(
-        [parnames[i] => getindex.(tf_samples, i) for i in 1:4]...,
+        [parnames[i] => getindex.(tf_samples, i)[:,1] for i in 1:4]...,
         :method => "Adjust-post",
         :alpha => 1.0
     )
