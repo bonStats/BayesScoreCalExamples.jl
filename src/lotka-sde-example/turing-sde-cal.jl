@@ -188,7 +188,7 @@ cal = Calibration(tr_cal_points, tr_approx_samples_newx)
 d = BayesScoreCal.dimension(cal)[1]
 tf = CholeskyAffine(d)
 M = inv(Diagonal(std(cal.μs)))
-res = energyscorecalibrate!(tf, cal, is_weights, scaling = M, penalty = (0.0, 0.05))
+res = energyscorecalibrate!(tf, cal, is_weights, scaling = M, penalty = (0.0, 0.05, 0.05))
 
 # no adjustment
 calcheck_approx = coverage(cal, checkprobs)

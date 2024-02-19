@@ -190,7 +190,7 @@ is_weights = ones(N_importance)
 d = BayesScoreCal.dimension(cal)[1]
 tf = CholeskyAffine(d)
 M = inv(Diagonal(std(cal.μs)))
-res = energyscorecalibrate!(tf, cal, is_weights, scaling = M, penalty = (0.0, 0.05))
+res = energyscorecalibrate!(tf, cal, is_weights, scaling = M, penalty = (0.0, 0.1, 0.0))
 
 tf.L
 tf.b
