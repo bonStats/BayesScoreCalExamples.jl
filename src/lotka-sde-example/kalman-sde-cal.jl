@@ -217,16 +217,14 @@ tf_samples = inverse(bij).(tf.(tr_approx_samples, [mean(tr_approx_samples)]))
 # store results
 parnames = [Symbol("beta$i") for i in 1:4]
 
-samples = DataFrame[]
-push!(samples, 
+samples = 
     DataFrame(
         [parnames[i] => getindex.(approx_samples, i)[:,1] for i in 1:4]...,
         :method => "Approx-post",
         :alpha => -1.0
     )
-)
 
-push!(samples, 
+append!(samples, 
     DataFrame(
         [parnames[i] => getindex.(tf_samples, i)[:,1] for i in 1:4]...,
         :method => "Adjust-post",
@@ -234,7 +232,7 @@ push!(samples,
     )
 )
 
-push!(samples, 
+append!(samples, 
     DataFrame(
         [parnames[i] => true_p[i] for i in 1:4]...,
         :method => "True-vals",
@@ -242,18 +240,15 @@ push!(samples,
     )
 )
 
-check = DataFrame[]
-
-push!(check,
+check = 
     DataFrame(
         [parnames[i] => getindex.(calcheck_approx, i) for i in 1:4]...,
         :prob => checkprobs,
         :method => "Approx-post",
         :alpha => -1.0
     )
-)
 
-push!(check,
+append!(check,
     DataFrame(
         [parnames[i] => getindex.(calcheck_adjust, i) for i in 1:4]...,
         :prob => checkprobs,
@@ -263,5 +258,5 @@ push!(check,
 )
 
 
-#CSV.write("src/lotka-sde-example/kalman-sde-samples.csv", samples)
-#CSV.write("src/lotka-sde-example/kalman-sde-covcheck.csv", check)
+CSV.write("src/lotka-sde-example/kalman-sde-samples.csv", samples)
+CSV.write("src/lotka-sde-example/kalman-sde-covcheck.csv", check)
