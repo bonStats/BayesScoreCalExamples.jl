@@ -21,9 +21,8 @@ using SharedArrays
 using DataFrames
 using CSV
 using BayesScoreCal
+using BayesScoreCalExamples
 using ProgressMeter
-
-include("turing-helpers.jl")
 
 # set to redo simulations (CACHE TOO LARGE TO ADD TO REPO)
 use_cache = false

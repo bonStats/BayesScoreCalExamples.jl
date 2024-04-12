@@ -2,6 +2,7 @@
 # Likelihood is approximated by extended Kalman Filter
 
 using BayesScoreCal
+using BayesScoreCalExamples
 using Distributions
 using LinearAlgebra
 using Turing
@@ -15,7 +16,6 @@ using DataFrames
 using CSV
 
 include("direct-ekf.jl")
-include("turing-helpers.jl")
 
 # approximate/true model settings
 N_samples = 1000

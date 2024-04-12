@@ -1,5 +1,19 @@
 module BayesScoreCalExamples
 
-# Write your package code here.
+using Optim
+using Distributions
+using Turing
+using BayesScoreCal
+
+include("turing-helpers.jl")
+export getsamples
+export getparams
+
+include("direct-ekf.jl")
+export KalmanEM
+export GaussianFilter
+export KalmanApproxSDE
+export kfsde
+export lv_kalman
 
 end
