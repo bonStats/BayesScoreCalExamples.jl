@@ -113,6 +113,8 @@ function (k::KalmanApproxSDE)(p::Vector{<:Real}, R::AbstractMatrix{<:Real}, μ0:
             info = 1
         elseif err isa SingularException
             info = 2
+        elseif err isa ArgumentError
+            info = 3
         else 
             info = 99
             throw(err)

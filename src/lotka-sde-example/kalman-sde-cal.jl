@@ -177,7 +177,7 @@ cal_points = inverse(bij).(multiplyscale(bij.(select_approx_samples), vmultiplie
 
 
 
-# jldsave("src/lotka-sde-example/kalman-sde-cal.jld2"; cal, approx_samples, true_pars, bij)
+#jldsave("src/lotka-sde-example/kalman-sde-cal-20240304.jld2"; cal, approx_samples, true_pars, bij, data)
 
 cal = load("src/lotka-sde-example/kalman-sde-cal.jld2", "cal")
 approx_samples = load("src/lotka-sde-example/kalman-sde-cal.jld2", "approx_samples")
@@ -188,12 +188,13 @@ bij = load("src/lotka-sde-example/kalman-sde-cal.jld2", "bij")
 is_weights = ones(N_importance)
 
 d = BayesScoreCal.dimension(cal)[1]
-tf = CholeskyAffine(d)
+tf = EigenAffine(d, 1.0)
 M = inv(Diagonal(std(cal.μs)))
-res = energyscorecalibrate!(tf, cal, is_weights, scaling = M, penalty = (0.0, 0.1, 0.0))
+res = energyscorecalibrate!(tf, cal, is_weights, scaling = M, penalty = (10.0, 1.0, 0.0))
 
-tf.L
+tf.V * Diagonal(tf.d .+ tf.dmin)
 tf.b
+tf.V * tf.V'
 
 # no adjustment
 calcheck_approx = coverage(cal, checkprobs)
