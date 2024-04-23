@@ -8,6 +8,8 @@ using BayesScoreCal
 include("turing-helpers.jl")
 export getsamples
 export getparams
+export dropvec
+export paramindices
 
 include("direct-ekf.jl")
 export KalmanEM

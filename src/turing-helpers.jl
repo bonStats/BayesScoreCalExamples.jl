@@ -16,7 +16,5 @@ end
 getparams(m::DynamicPPL.Model) = DynamicPPL.syms(DynamicPPL.VarInfo(m))
 
 
-# # helper
-# getparams(m::DynamicPPL.Model) = DynamicPPL.syms(DynamicPPL.VarInfo(m))
-# dropvec(x::Vector{T}) where {T} = length(x) == 1 ? x[1] : x
-# paramindices(x::Symbol, indi::AbstractVector{Int64}) = length(indi) == 1 ? String(x) : ["$(String(x))[$i]" for i in indi]
+dropvec(x::Vector{T}) where {T} = length(x) == 1 ? x[1] : x
+paramindices(x::Symbol, indi::AbstractVector{Int64}) = length(indi) == 1 ? String(x) : ["$(String(x))[$i]" for i in indi]
