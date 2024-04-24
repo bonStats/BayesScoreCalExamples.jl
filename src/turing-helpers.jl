@@ -15,6 +15,6 @@ function getsamples(chains::Chains, sym::Symbol)
 end
 getparams(m::DynamicPPL.Model) = DynamicPPL.syms(DynamicPPL.VarInfo(m))
 
-
+# other helpers
 dropvec(x::Vector{T}) where {T} = length(x) == 1 ? x[1] : x
 paramindices(x::Symbol, indi::AbstractVector{Int64}) = length(indi) == 1 ? String(x) : ["$(String(x))[$i]" for i in indi]
