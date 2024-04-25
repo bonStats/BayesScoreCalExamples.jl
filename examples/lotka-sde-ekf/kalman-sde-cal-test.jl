@@ -259,5 +259,5 @@ append!(check,
 )
 
 
-CSV.write("src/lotka-sde-example/kalman-sde-samples.csv", samples)
-CSV.write("src/lotka-sde-example/kalman-sde-covcheck.csv", check)
+CSV.write("examples/lotka-sde-ekf/kalman-sde-samples.csv", samples)
+CSV.write("examples/lotka-sde-ekf/kalman-sde-covcheck.csv", check)
