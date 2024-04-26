@@ -109,7 +109,7 @@ function (k::KalmanApproxSDE)(p::Vector{<:Real}, R::AbstractMatrix{<:Real}, μ0:
     try
         loglike = kalman!(k.xscratch, k.t0, k.model, k.H, R, p, k.observations, k.dt0; nugget = nugget)
     catch err
-        if err isa PosDefException
+        if err isa LinearAlgebra.PosDefException
             info = 1
         elseif err isa SingularException
             info = 2

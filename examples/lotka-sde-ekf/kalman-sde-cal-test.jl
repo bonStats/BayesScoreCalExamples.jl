@@ -15,8 +15,6 @@ using JLD2
 using DataFrames
 using CSV
 
-include("direct-ekf.jl")
-
 # approximate/true model settings
 N_samples = 1000
 
@@ -149,40 +147,40 @@ additional_approx_samples = getsamples(ch_approx, :ϕ)[select_id,1]
 # on transformed scale
 cal_points = inverse(bij).(multiplyscale(bij.(select_approx_samples), vmultiplier))
 
-    # newx approx models: pre-allocate
-    cal_samples_array = SharedArray{Float64}(length(cal_points[1]), N_energy, N_importance)
+# newx approx models: pre-allocate
+cal_samples_array = SharedArray{Float64}(length(cal_points[1]), N_energy, N_importance)
 
-    Threads.@threads for t in eachindex(cal_points)
-        # new data
-        new_prob = remake(prob_sde, p = [cal_points[t]; additional_approx_samples[t]])
-        newdata = solve(new_prob, SOSRI(), saveat=0.01)
-        # (model|new data)
-        mod_obsv = [Observation(newdata(t),t) for t in otimes]
-        mod_kfsde = KalmanApproxSDE(lvem, mod_obsv, 0.0, dtk, H, x)
-        mod_newdata = lv_kalman(mod_kfsde)
-        # mcmc(model|new data)
-        mod_approx_samples_newdata = sample(mod_newdata, NUTS(), N_samples; progress=false, drop_warmup=false)
+Threads.@threads for t in eachindex(cal_points)
+    # new data
+    new_prob = remake(prob_sde, p = [cal_points[t]; additional_approx_samples[t]])
+    newdata = solve(new_prob, SOSRI(), saveat=0.01)
+    # (model|new data)
+    mod_obsv = [Observation(newdata(t),t) for t in otimes]
+    mod_kfsde = KalmanApproxSDE(lvem, mod_obsv, 0.0, dtk, H, x)
+    mod_newdata = lv_kalman(mod_kfsde)
+    # mcmc(model|new data)
+    mod_approx_samples_newdata = sample(mod_newdata, NUTS(), N_samples; progress=false, drop_warmup=false)
 
-        # samples from mcmc(model|new data)
-        cal_samples_array[:,:,t] = hcat(getsamples(mod_approx_samples_newdata, :pars)...)
-            
-    end
+    # samples from mcmc(model|new data)
+    cal_samples_array[:,:,t] = hcat(getsamples(mod_approx_samples_newdata, :pars)...)
+        
+end
 
-    # transform data to  Matrix{Vector}
-    cal_samples = [cal_samples_array[:,i,j] for i in 1:N_energy, j in 1:N_importance]
-    
-    # save calibration data
+# transform data to  Matrix{Vector}
+cal_samples = [cal_samples_array[:,i,j] for i in 1:N_energy, j in 1:N_importance]
 
-    cal = Calibration(bij.(cal_points), bij.(cal_samples))
+# save calibration data
+
+cal = Calibration(bij.(cal_points), bij.(cal_samples))
 
 
 
 #jldsave("src/lotka-sde-example/kalman-sde-cal-20240304.jld2"; cal, approx_samples, true_pars, bij, data)
 
-cal = load("src/lotka-sde-example/kalman-sde-cal.jld2", "cal")
-approx_samples = load("src/lotka-sde-example/kalman-sde-cal.jld2", "approx_samples")
-true_pars = load("src/lotka-sde-example/kalman-sde-cal.jld2", "true_pars")
-bij = load("src/lotka-sde-example/kalman-sde-cal.jld2", "bij")
+cal = load("examples/lotka-sde-ekf/kalman-sde-cal.jld2", "cal")
+approx_samples = load("examples/lotka-sde-ekf/kalman-sde-cal.jld2", "approx_samples")
+true_pars = load("examples/lotka-sde-ekf/kalman-sde-cal.jld2", "true_pars")
+bij = load("examples/lotka-sde-ekf/kalman-sde-cal.jld2", "bij")
 
 # approximate weights
 is_weights = ones(N_importance)
@@ -205,6 +203,9 @@ plot!(checkprobs, checkprobs, label = "target", colour = "black")
 calcheck_adjust = coverage(cal, tf, checkprobs)
 plot(checkprobs, hcat(calcheck_adjust...)',  label = ["α"  "β"  "γ"  "δ"], title = "Adjusted posterior calibration coverage")
 plot!(checkprobs, checkprobs, label = "target", colour = "black")
+plot!(checkprobs, checkprobs .- 0.1, label = "", colour = "black", linestyle = :dash)
+plot!(checkprobs, checkprobs .+ 0.1, label = "", colour = "black", linestyle = :dash)
+
 
 rmse(cal)
 rmse(cal,tf)

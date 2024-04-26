@@ -60,7 +60,7 @@ approx_samples_newy = SharedArray{Float64}(length(cal_points[1]), N_energy, N_im
 Threads.nthreads()
 
 # generate new data/models: cal_point -> new y -> new mod -> new approx posterior
-Threads.@threads for j in 1:lastindex(cal_points)
+Threads.@threads for j in eachindex(cal_points)
     println("Working on... $j") # need to supress vi progress meter and info
 
     # new data
