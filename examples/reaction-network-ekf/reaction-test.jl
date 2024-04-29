@@ -1,4 +1,5 @@
 using BayesScoreCal
+using BayesScoreCalExamples
 using Distributions
 using ModelingToolkit
 using Catalyst
@@ -9,8 +10,6 @@ using SparseArrays
 
 getparams(m::DynamicPPL.Model) = DynamicPPL.syms(DynamicPPL.VarInfo(m))
 getstatesymbol(x::SymbolicUtils.BasicSymbolic) = x.metadata[Symbolics.VariableSource][2]
-
-include("direct-ekf.jl")
 
 mapk_2step = @reaction_network begin
     k1, X + E --> XE
@@ -195,19 +194,6 @@ mapk2kem = KalmanEM(mapk2drift, mapk2noise_sparse, mapk2jacobian_sparse)
 #mapk2kem.noise(ord_u0, p)
 #mapk2kem.jac(ord_u0, p)
 
-
-g = GaussianFilter(zeros(nstates), Diagonal(ones(nstates)))
-
-predict!(g, mapk2kem, p, 0.01, nugget = 0.01)
-
-ll = update!(g, rand(nstates), Diagonal(ones(nstates)), Diagonal(ones(nstates)))
-
-
-g = GaussianFilter(ord_u0, Diagonal(0.5 * sqrt.(max.(ord_u0, 1.0))))
-
-kalman!(g, 0.0, mapk2kem, H, R, p.+ 0.000001, obsv, 0.1, nugget = (0.0, 0.0))
-
-
 x = GaussianFilter(ord_u0 .+ 0.001, Diagonal(0.5 * sqrt.(max.(ord_u0, 1.0))))
 kfsde = KalmanApproxSDE(mapk2kem, obsv, 0.0, 1.0, H, x)
 
@@ -218,7 +204,7 @@ param_fixed = Dict(
     :k1 => 0.001,
     :k4 => 0.001,
     :k7 => 0.0001,
-    :k10 => 0.0001
+    :k10 => 0.001
 )
 
 
@@ -253,6 +239,7 @@ reorder_id = [get(par_id, v, 0) for v in ord_parameters]
         return nothing
     end
     
+    return nothing
 end
 
 approx_mod = kalman_model(kfsde)
