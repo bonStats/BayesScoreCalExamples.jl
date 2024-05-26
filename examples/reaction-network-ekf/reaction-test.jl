@@ -7,9 +7,32 @@ using LinearAlgebra
 using DifferentialEquations
 using Turing
 using SparseArrays
+using Distributed
+using SharedArrays
+using JLD2
+using StatsPlots
 
 getparams(m::DynamicPPL.Model) = DynamicPPL.syms(DynamicPPL.VarInfo(m))
 getstatesymbol(x::SymbolicUtils.BasicSymbolic) = x.metadata[Symbolics.VariableSource][2]
+
+# diagnostic settings
+checkprobs = range(0.1,0.95,step=0.05)
+
+# calibration helpers
+function multiplyscale(x::Vector{Vector{Float64}}, scale::Float64) 
+    μ = mean(x)
+    scale .* (x .- [μ]) .+ [μ]
+end
+
+# approximate/true model settings
+N_samples = 1000
+
+# optimisation settings
+N_importance = 200
+N_energy = 1000
+energyβ = 1.0
+vmultiplier = 1.5
+dtk = 1.0 # time step kalman
 
 mapk_2step = @reaction_network begin
     k1, X + E --> XE
@@ -52,6 +75,9 @@ nobs = length(observed)
 nstates = length(states(mapk_2step))
 npars = length(parameters(mapk_2step))
 
+# identifiable parameters
+idpar = [:k3, :k6, :k9, :k12]
+
 σ = 1.
 R = Diagonal(repeat([σ^2], nobs))
 H = Matrix(hcat([I[1:nstates, j] for j in findall(observedid)]...)')
@@ -84,10 +110,10 @@ par_id = Dict(ord_parameters .=> 1:length(ord_parameters))
 
 dprob = DiscreteProblem(mapk_2step, u0, tspan, p)
 jprob = JumpProblem(mapk_2step, dprob, Direct())
-jsol = solve(jprob, SSAStepper())
+data = solve(jprob, SSAStepper())
 
-obsv = [Observation(jsol(t)[observedid], t) for t in otimes]
-gstates = GaussianFilter(jsol(0.0)[observedid], R)
+obsv = [Observation(data(t)[observedid], t) for t in otimes]
+gstates = GaussianFilter(data(0.0)[observedid], R)
 
 mapk_sde_sys = convert(SDESystem, mapk_2step; combinatoric_ratelaws=true)
 mapk_sde = SDEFunction(mapk_sde_sys, jac = true)
@@ -195,7 +221,7 @@ mapk2kem = KalmanEM(mapk2drift, mapk2noise_sparse, mapk2jacobian_sparse)
 #mapk2kem.jac(ord_u0, p)
 
 x = GaussianFilter(ord_u0 .+ 0.001, Diagonal(0.5 * sqrt.(max.(ord_u0, 1.0))))
-kfsde = KalmanApproxSDE(mapk2kem, obsv, 0.0, 1.0, H, x)
+kfsde = KalmanApproxSDE(mapk2kem, obsv, 0.0, dtk, H, x)
 
 kfsde(p, R).logZ
 kfsde(p, R).info
@@ -207,26 +233,26 @@ param_fixed = Dict(
     :k10 => 0.001
 )
 
-
-# collect and order parameters
-reorder_id = [get(par_id, v, 0) for v in ord_parameters]
+padfixed(p::Vector{<:Real}, k1::Real, k4::Real, k7::Real, k10::Real) = [k1; p[1:2]; k4; p[6]; p[3]; k7; p[7]; p[4]; k10; p[8]; p[5]]
 
 @model kalman_model(kfsde::KalmanApproxSDE) = begin
-     
-    k1 = param_fixed[:k1]
-    k2 = par[:k2] #~ Uniform(0.0, par[:k1]) 
-    k3 ~ Uniform(0.0, 1.0)    
-    k4 = param_fixed[:k4]  
-    k5 = par[:k5] #~ Uniform(0.0, par[:k4])  
-    k6 ~ Uniform(0.0, 1.0)
-    k7 = param_fixed[:k7]  
-    k8 = par[:k8] #~ Uniform(0.0, par[:k7])   
-    k9 ~ Uniform(0.0, 1.0)
-    k10 = param_fixed[:k10]     
-    k11 = par[:k11] #~ Uniform(0.0, par[:k10]) 
-    k12 ~ Uniform(0.0, 1.0)          
+    
+    κ = zeros(4)
 
-    k = [k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12]
+    k1 = par[:k1] # fixed
+    k2 ~ Uniform(0.0, par[:k1])
+    κ[1] ~ Uniform(0.0, 1.0)   # κ[1] = k3
+    k4 = par[:k4] # fixed
+    k5 ~ Uniform(0.0, par[:k4])
+    κ[2] ~ Uniform(0.0, 1.0) # κ[2] = k6
+    k7 = par[:k7] # fixed
+    k8 ~ Uniform(0.0, par[:k7])
+    κ[3] ~ Uniform(0.0, 1.0) # κ[3] = k9
+    k10 = par[:k10] # fixed    
+    k11 ~ Uniform(0.0, par[:k10])
+    κ[4] ~ Uniform(0.0, 1.0) # κ[4] = k12      
+
+    k = [k1, k2, κ[1], k4, k5, κ[2], k7, k8, κ[3], k10, k11, κ[4]]
 
     σ = 0.01
     sol = kfsde(k, Diagonal(I * σ^2, nobs))
@@ -242,12 +268,93 @@ reorder_id = [get(par_id, v, 0) for v in ord_parameters]
     return nothing
 end
 
-approx_mod = kalman_model(kfsde)
-ch_approx_mod = sample(approx_mod, NUTS(), 1000, init_params = [par[:k3], par[:k6], par[:k9], par[:k12]])
+approxmodel = kalman_model(kfsde)
+ch_approx = sample(approxmodel, NUTS(), 1000) #  init_params = [par[:k3], par[:k6], par[:k9], par[:k12]]
+
+
+## Calibration
+
+# get vector of samples
+approx_samples_all = getsamples.([ch_approx], getparams(approxmodel))
+initial_par = vcat(mean.(approx_samples_all)...)
+
+# get bijection used by turing
+κ_sel = findfirst(:κ .== getparams(approxmodel))
+npars = length(approx_samples_all[κ_sel][1])
+true_pars = getindex.([par], idpar)
+bij_all = bijector(approxmodel)
+bij = Stacked(bij_all.bs[(0:npars-1) .+ κ_sel]...)
+
+select_id = sample(1:length(ch_approx), N_importance) 
+select_approx_samples_all = hcat(approx_samples_all...)[select_id,:]
+
+cal_samples_all = select_approx_samples_all
+cal_points = inverse(bij).(multiplyscale(bij.(select_approx_samples_all[:,κ_sel]), vmultiplier))
+cal_samples_all[:,κ_sel] = cal_points
+
+# newx approx models: pre-allocate
+cal_samples_array = SharedArray{Float64}(length(cal_points[1]), N_energy, N_importance)
+
+Threads.@threads for t in eachindex(cal_points)
+    # new data
+    new_p = padfixed(vcat(cal_samples_all[t,:]...), par[:k1], par[:k4], par[:k7], par[:k10])
+    new_prob = remake(jprob, p = new_p)
+    newdata = solve(new_prob, SSAStepper())
+    # (model|new data)
+    mod_obsv = [Observation(newdata(t)[observedid],t) for t in otimes]
+    mod_kfsde = KalmanApproxSDE(mapk2kem, mod_obsv, 0.0, dtk, H, x)
+    mod_newdata = kalman_model(mod_kfsde)
+    # mcmc(model|new data)
+    mod_approx_samples_newdata = sample(mod_newdata, NUTS(), N_samples; progress=false, drop_warmup=false, initial_params = initial_par)
+
+    # samples from mcmc(model|new data)
+    cal_samples_array[:,:,t] = hcat(getsamples(mod_approx_samples_newdata, :κ)...)
+        
+end
+
+# transform data to  Matrix{Vector}
+cal_samples = [cal_samples_array[:,i,j] for i in 1:N_energy, j in 1:N_importance]
+
+# save calibration data
+cal = Calibration(bij.(cal_points), bij.(cal_samples))
+
+#jldsave("examples/reaction-network-ekf/rn-cal-20240526.jld2"; cal, ch_approx, par, bij, data)
+
+# approximate weights
+is_weights = ones(N_importance)
+
+d = BayesScoreCal.dimension(cal)[1]
+tf = EigenAffine(d, 0.5)
+M = inv(Diagonal(std(cal.μs)))
+res = energyscorecalibrate!(tf, cal, is_weights, scaling = M, penalty = (10.0, 0.0, 0.0))
+
+tf.V * Diagonal(tf.d .+ tf.dmin)
+tf.b
+tf.V * tf.V'
+
+# no adjustment
+calcheck_approx = coverage(cal, checkprobs)
+plot(checkprobs, hcat(calcheck_approx...)',  label = ["κ₁"  "κ₂"  "κ₃"  "κ₄"], title = "Approx. posterior calibration coverage")
+plot!(checkprobs, checkprobs, label = "target", colour = "black")
+plot!(checkprobs, checkprobs .- 0.1, label = "", colour = "black", linestyle = :dash)
+plot!(checkprobs, checkprobs .+ 0.1, label = "", colour = "black", linestyle = :dash)
+
+# adjustment
+calcheck_adjust = coverage(cal, tf, checkprobs)
+plot(checkprobs, hcat(calcheck_adjust...)',  label = ["κ₁"  "κ₂"  "κ₃"  "κ₄"], title = "Adjusted posterior calibration coverage")
+plot!(checkprobs, checkprobs, label = "target", colour = "black")
+plot!(checkprobs, checkprobs .- 0.1, label = "", colour = "black", linestyle = :dash)
+plot!(checkprobs, checkprobs .+ 0.1, label = "", colour = "black", linestyle = :dash)
+
+
+## OLD CODE ##
 
 DynamicPPL.VarInfo(approx_mod)
 
 # try laplace approximation instead
+
+# collect and order parameters
+reorder_id = [get(par_id, v, 0) for v in ord_parameters]
 
 reorder_id
 
