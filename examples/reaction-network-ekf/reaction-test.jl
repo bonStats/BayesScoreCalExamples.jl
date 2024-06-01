@@ -11,6 +11,8 @@ using Distributed
 using SharedArrays
 using JLD2
 using StatsPlots
+using DataFrames
+using CSV
 
 getparams(m::DynamicPPL.Model) = DynamicPPL.syms(DynamicPPL.VarInfo(m))
 getstatesymbol(x::SymbolicUtils.BasicSymbolic) = x.metadata[Symbolics.VariableSource][2]
@@ -320,6 +322,14 @@ cal = Calibration(bij.(cal_points), bij.(cal_samples))
 
 #jldsave("examples/reaction-network-ekf/rn-cal-20240526.jld2"; cal, ch_approx, par, bij, data)
 
+
+cal = load("examples/reaction-network-ekf/rn-cal-20240526.jld2", "cal")
+ch_approx = load("examples/reaction-network-ekf/rn-cal-20240526.jld2", "ch_approx")
+par = load("examples/reaction-network-ekf/rn-cal-20240526.jld2", "par")
+bij = load("examples/reaction-network-ekf/rn-cal-20240526.jld2", "bij")
+data = load("examples/reaction-network-ekf/rn-cal-20240526.jld2", "data")
+
+
 # approximate weights
 is_weights = ones(N_importance)
 
@@ -347,129 +357,59 @@ plot!(checkprobs, checkprobs .- 0.1, label = "", colour = "black", linestyle = :
 plot!(checkprobs, checkprobs .+ 0.1, label = "", colour = "black", linestyle = :dash)
 
 
-## OLD CODE ##
+rmse(cal)
+rmse(cal,tf)
 
-DynamicPPL.VarInfo(approx_mod)
+# get adjusted samples
+approx_samples = vec(approx_samples_all[κ_sel])
+tr_approx_samples = bij.(approx_samples)
+tf_samples = inverse(bij).(tf.(tr_approx_samples, [mean(tr_approx_samples)]))
 
-# try laplace approximation instead
+[mean(tf_samples) std(tf_samples) true_pars]
+[mean(approx_samples) std(approx_samples) true_pars]
 
-# collect and order parameters
-reorder_id = [get(par_id, v, 0) for v in ord_parameters]
+# store results
+parnames = [:k3, :k6, :k9, :k12]
 
-reorder_id
+samples = 
+    DataFrame(
+        [parnames[i] => getindex.(approx_samples, i) for i in 1:4]...,
+        :method => "Approx-post",
+        :alpha => -1.0
+    )
 
+append!(samples, 
+    DataFrame(
+        [parnames[i] => getindex.(tf_samples, i) for i in 1:4]...,
+        :method => "Adjust-post",
+        :alpha => 1.0
+    )
+)
 
-k1 = p
-k1[3] = 0.18 - 0.005
-sol = kfsde(k1[reorder_id], Diagonal(I * 1.0, nobs))
-sol.logZ
+append!(samples, 
+    DataFrame(
+        [parnames[i] => true_pars[i] for i in 1:4]...,
+        :method => "True-vals",
+        :alpha => -1.0
+    )
+)
 
-@profile kfsde(p, Diagonal(I * 1.0, nobs))
+check = 
+    DataFrame(
+        [parnames[i] => getindex.(calcheck_approx, i) for i in 1:4]...,
+        :prob => checkprobs,
+        :method => "Approx-post",
+        :alpha => -1.0
+    )
 
-using ForwardDiff
+append!(check,
+    DataFrame(
+        [parnames[i] => getindex.(calcheck_adjust, i) for i in 1:4]...,
+        :prob => checkprobs,
+        :method => "Adjust-post",
+        :alpha => 1.0
+    )
+)
 
-f(x) = sum(mapk2drift(ord_u0, x) .* ones(11))
-ForwardDiff.gradient(x -> sum(mapk2drift(ord_u0, x) .* ones(11)), p)
-
-
-ForwardDiff.gradient(x -> sum(mapk2noise(ord_u0 .+ 0.001, x) * ones(12)), p)
-ForwardDiff.gradient(x -> sum(mapk2jacobian(ord_u0, x) * ones(11)), p)
-ForwardDiff.gradient(x -> kfsde(x, R).logZ, p)
-
-pp = remake(sdeprob, tspan = (0.0,1.0), u0 = uu)
-
-sol = solve(pp, EM(), dt = 0.1)
-sol(0.1)
-
-SciMLSensitivity.SDEAdjointProblem(sol, BacksolveAdjoint(), )
-
-
-generate_jacobian(sdeprob, u0, k1)
-
-
-zz = zeros(Real, 11)
-function f(x) 
-    vv = merge(Dict(parameters(mapk_2step) .=> x), Dict(states(mapk_2step) .=> uu))
-    zz = Symbolics.value.(substitute(modelsymjac, vv))
-    sum(zz)
-end
-
-ForwardDiff.gradient(f, k1)
-
-(zz, uu, k1)
-
-
-solve(prob, EM(), dt = dt)
-
-# check if differentiable 
-
-
-
-zz = mapk2noise(ord_u0 .+ 0.01, p)
-
-indzz = CartesianIndices(zz)[.! iszero.(zz)]
-
-repr(map(x -> x.I[1], indzz))
-repr(map(x -> x.I[2], indzz))
-
-
-["-sqrt(abs(p[1]*u[2]*u[1]))" "sqrt(abs(p[2]*u[3]))" "0" "0" "0" sqrt(abs(p[6]*u[6])) "0" "0" "0" "0" "0" "0"; 
-"-sqrt(abs(p[1]*u[2]*u[1]))" "sqrt(abs(p[2]*u[3]))" "sqrt(abs(p[3]*u[3]))" "0" "0" "0" "0" "0" "0" "0" "0" "0";
-"sqrt(abs(p[1]*u[2]*u[1]))" "-sqrt(abs(p[2]*u[3]))" "-sqrt(abs(p[3]*u[3]))" "0" "0" "0" "0" "0" "0" "0" "0" "0"; 
-"0" "0" "sqrt(abs(p[3]*u[3]))" "-sqrt(abs(p[4]*u[5]*u[4]))" sqrt(abs(p[5]*u[6])) "0" -sqrt(abs(p[7]*u[4]*u[7])) sqrt(abs(p[8]*u[8])) sqrt(abs(p[9]*u[8])) "0" "0" "0";
-"0" "0" "0" -sqrt(abs(p[4]*u[5]*u[4])) sqrt(abs(p[5]*u[6])) sqrt(abs(p[6]*u[6])) "0" "0" "0" "0" "0" "0"; 
-"0" "0" "0" sqrt(abs(p[4]*u[5]*u[4])) -sqrt(abs(p[5]*u[6])) -sqrt(abs(p[6]*u[6])) "0" "0" "0" "0" "0" "0";
-"0" "0" "0" "0" "0" "0" -sqrt(abs(p[7]*u[4]*u[7])) sqrt(abs(p[8]*u[8])) "0" "0" "0" sqrt(abs(p[12]*u[11])); 
-"0" "0" "0" "0" "0" "0" sqrt(abs(p[7]*u[4]*u[7])) -sqrt(abs(p[8]*u[8])) -sqrt(abs(p[9]*u[8])) "0" "0" "0";
-"0" "0" "0" "0" "0" "0" "0" "0" sqrt(abs(p[9]*u[8])) -sqrt(abs(p[10]*u[10]*u[9])) sqrt(abs(p[11]*u[11])) "0"; 
-"0" "0" "0" "0" "0" "0" "0" "0" "0" -sqrt(abs(p[1"0"]*u[10]*u[9])) sqrt(abs(p[11]*u[11])) sqrt(abs(p[12]*u[11]));
-"0" "0" "0" "0" "0" "0" "0" "0" "0" sqrt(abs(p[10]*u[10]*u[9])) -sqrt(abs(p[11]*u[11])) -sqrt(abs(p[12]*u[11]))]
-
-[-sqrt(abs(p[1]*u[2]*u[1])), -sqrt(abs(p[1]*u[2]*u[1])), sqrt(abs(p[1]*u[2]*u[1])), 
-sqrt(abs(p[2]*u[3])), sqrt(abs(p[2]*u[3])), -sqrt(abs(p[2]*u[3])),
-sqrt(abs(p[3]*u[3])), -sqrt(abs(p[3]*u[3])), sqrt(abs(p[3]*u[3])),
--sqrt(abs(p[4]*u[5]*u[4]))
-]
-
-
-
-@profile mapk2noise(ord_u0 .+ 0.01 , p)
-
-
-
-
-
-
-M = [
--a b  0. 0. 0. f  0. 0. 0. 0. 0. 0.; 
--a b  c  0. 0. 0. 0. 0. 0. 0. 0. 0.;
-a -b -c  0. 0. 0. 0. 0. 0. 0. 0. 0.; 
-0. 0. c -d  e  0 -g  h  i  0. 0. 0.;
-0. 0. 0 -d  e  f  0. 0. 0. 0. 0. 0.; 
-0. 0. 0. d -e -f  0. 0. 0. 0. 0. 0.;
-0. 0. 0. 0. 0. 0 -g  h  0. 0. 0. l ; 
-0. 0. 0. 0. 0. 0. g -h -i  0. 0. 0.;
-0. 0. 0. 0. 0. 0. 0. 0. i -j  k  0.; 
-0. 0. 0. 0. 0. 0. 0. 0. 0 -j  k  l ;
-0. 0. 0. 0. 0. 0. 0. 0. 0. j -k -l
-]
-
-rw = [1, 2, 3, 1, 2, 3, 2, 3, 4, 4, 5, 6, 4, 5, 6, 1, 5, 6, 4, 7, 8, 4, 7, 8, 4, 8, 9, 9, 10, 11, 9, 10, 11, 7, 10, 11]
-cl = [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11, 12, 12, 12]
-
-z = [
-    sqrt(abs(p[1]*u[2]*u[1])),
-    sqrt(abs(p[2]*u[3])), 
-    sqrt(abs(p[3]*u[3])), 
-    sqrt(abs(p[4]*u[5]*u[4])), 
-    sqrt(abs(p[5]*u[6])),
-    sqrt(abs(p[6]*u[6])),
-    sqrt(abs(p[7]*u[4]*u[7])),
-    sqrt(abs(p[8]*u[8])),
-    sqrt(abs(p[9]*u[8])),
-    sqrt(abs(p[10]*u[10]*u[9])),
-    sqrt(abs(p[11]*u[11])),
-    sqrt(abs(p[12]*u[11]))
-]
-
-el = [-z[1],-z[1],z[1],z[2],z[2],-z[2],z[3],-z[3],z[3],-z[4],-z[4],z[4],z[5],z[5],-z[5],z[6],z[6],-z[6],-z[7],-z[7],z[7],z[8],z[8],-z[8],z[9],-z[9],z[9],-z[10],-z[10],z[10],z[11],z[11],-z[11],z[12],z[12],-z[12]]
+CSV.write("examples/reaction-network-ekf/kalman-rn-samples.csv", samples)
+CSV.write("examples/reaction-network-ekf/kalman-rn-covcheck.csv", check)
