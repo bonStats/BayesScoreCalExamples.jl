@@ -181,6 +181,7 @@ cal = load("examples/lotka-sde-ekf/kalman-sde-cal.jld2", "cal")
 approx_samples = load("examples/lotka-sde-ekf/kalman-sde-cal.jld2", "approx_samples")
 true_pars = load("examples/lotka-sde-ekf/kalman-sde-cal.jld2", "true_pars")
 bij = load("examples/lotka-sde-ekf/kalman-sde-cal.jld2", "bij")
+data = load("examples/lotka-sde-ekf/kalman-sde-cal.jld2", "data")
 
 # approximate weights
 is_weights = ones(N_importance)
@@ -262,3 +263,7 @@ append!(check,
 
 CSV.write("examples/lotka-sde-ekf/kalman-sde-samples.csv", samples)
 CSV.write("examples/lotka-sde-ekf/kalman-sde-covcheck.csv", check)
+
+# data to csv
+csv_data = DataFrame(hcat(hcat(data.u...)', data.t), ["X","Y","t"])
+CSV.write("examples/lotka-sde-ekf/lv-dataset.csv", csv_data)
