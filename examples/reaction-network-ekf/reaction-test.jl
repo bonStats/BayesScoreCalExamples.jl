@@ -413,3 +413,7 @@ append!(check,
 
 CSV.write("examples/reaction-network-ekf/kalman-rn-samples.csv", samples)
 CSV.write("examples/reaction-network-ekf/kalman-rn-covcheck.csv", check)
+
+# data to csv
+csv_data = DataFrame(hcat(hcat(data.u...)', data.t), ["X","E","XE","X^*","P1","X^*P[1]","Y","X^*Y","Y^*","P[2]","Y^*P[2]","t"])
+CSV.write("examples/reaction-network-ekf/rn-dataset.csv", csv_data)
